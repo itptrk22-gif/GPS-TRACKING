@@ -1,0 +1,15 @@
+const express=require("express");
+const http=require("http");
+const {Server}=require("socket.io");
+const path=require("path");
+const crypto=require("crypto");
+const app=express(); const server=http.createServer(app); const io=new Server(server);
+const PORT=process.env.PORT||3000; const sessions=new Map();
+app.use(express.json()); app.use(express.static(path.join(__dirname,"public")));
+const token=()=>crypto.randomBytes(24).toString("hex");
+app.post("/api/sessions",(req,res)=>{const id=crypto.randomBytes(8).toString("hex");const ownerToken=token();sessions.set(id,{ownerToken,active:true,lastLocation:null});res.json({id,ownerToken});});
+app.get("/api/sessions/:id",(req,res)=>{const s=sessions.get(req.params.id);if(!s)return res.status(404).json({error:"Sesi tidak ditemukan"});res.json({active:s.active,lastLocation:s.lastLocation});});
+app.post("/api/sessions/:id/stop",(req,res)=>{const s=sessions.get(req.params.id);if(!s||req.body.ownerToken!==s.ownerToken)return res.status(403).json({error:"Akses ditolak"});s.active=false;io.to(`owner:${req.params.id}`).emit("tracking-stopped");res.json({ok:true});});
+io.on("connection",socket=>{socket.on("owner-join",({id,ownerToken})=>{const s=sessions.get(id);if(s&&s.ownerToken===ownerToken){socket.join(`owner:${id}`);if(s.lastLocation)socket.emit("location-update",s.lastLocation);socket.emit("session-status",{active:s.active});}});socket.on("tracker-join",({id})=>{const s=sessions.get(id);if(s&&s.active)socket.join(`tracker:${id}`);});socket.on("location-update",({id,latitude,longitude,accuracy,timestamp})=>{const s=sessions.get(id);if(!s||!s.active||![latitude,longitude].every(Number.isFinite))return;const loc={latitude,longitude,accuracy:Number.isFinite(accuracy)?accuracy:null,timestamp:timestamp||Date.now()};s.lastLocation=loc;io.to(`owner:${id}`).emit("location-update",loc);});socket.on("tracker-stop",({id})=>socket.leave(`tracker:${id}`));});
+app.get("/track/:id",(req,res)=>res.sendFile(path.join(__dirname,"public","track.html")));app.get("/dashboard/:id",(req,res)=>res.sendFile(path.join(__dirname,"public","dashboard.html")));
+server.listen(PORT,"0.0.0.0",()=>console.log(`GPS app listening on ${PORT}`));
